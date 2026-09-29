@@ -1,0 +1,467 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2821
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\froman\fcharset0 Times-Bold;\f1\fmodern\fcharset0 Courier;\f2\froman\fcharset0 Times-Roman;
+\f3\fmodern\fcharset0 Courier-Bold;\f4\froman\fcharset0 Times-Italic;\f5\fnil\fcharset0 Menlo-Bold;
+\f6\froman\fcharset0 TimesNewRomanPSMT;}
+{\colortbl;\red255\green255\blue255;\red0\green0\blue0;\red109\green109\blue109;}
+{\*\expandedcolortbl;;\cssrgb\c0\c0\c0;\cssrgb\c50196\c50196\c50196;}
+\paperw11900\paperh16840\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\deftab720
+\pard\pardeftab720\sa321\partightenfactor0
+
+\f0\b\fs48 \cf0 \expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 ILP verification: bug found + corrected small-n tables for e5(n), e7(n)\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f4\i\b0\fs24 \cf0 Revised 29 Sept 2026. Corrections to the previous version: e5(15) changed from 3 to 4; the generic e7 value for n \uc0\u8801  4 (mod 7) changed from 0 to 4, so n = 4 and n = 11 are no longer listed as exceptions; the four open cells (n = 23, 24 for width 5; n = 18, 19 for width 7) are filled in; the last section is rewritten; the ILP script now needs PuLP 2.x and checks optimality two independent ways.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f0\i0\b
+\fs36 \cf0 The bug (important \'97 re-check anything certified before this fix)\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f1\b0\fs26 \cf0 tetromino_ilp.py
+\f2\fs24  (the exact-cover ILP for M(w,n), PuLP + CBC, 
+\f1\fs26 gapRel=0, gapAbs=0
+\f2\fs24 ) had a real correctness bug in how it read back the solver's status.\
+The docstring's reasoning was right in spirit \'97 forcing 
+\f1\fs26 gapRel=0, gapAbs=0
+\f2\fs24  should mean CBC will not report "Optimal" until the best bound and best incumbent coincide exactly \'97 but 
+\f0\b PuLP's own 
+\f3\fs26 LpStatus[prob.status]
+\f0\fs24  does not reliably reflect that.
+\f2\b0  When CBC is stopped by 
+\f1\fs26 timeLimit
+\f2\fs24  while holding a feasible-but-unproven incumbent, PuLP can still map that to 
+\f1\fs26 "Optimal"
+\f2\fs24 .\
+Caught empirically on 
+\f1\fs26 M(7,18)
+\f2\fs24  with a 60s limit: CBC's own log ended with\
+\pard\pardeftab720\partightenfactor0
+
+\f1\fs26 \cf0 Result - Stopped on time limit\
+Objective value:                6.00000000\
+Lower bound:                    2.000\
+Gap:                            2.00\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f2\fs24 \cf0 \'97 a gap of 2 between the incumbent (6) and the proven bound (2), i.e. nowhere near closed \'97 yet 
+\f1\fs26 pulp.LpStatus[prob.status]
+\f2\fs24  still read 
+\f1\fs26 "Optimal"
+\f2\fs24 , and the old script printed 
+\f1\fs26 M(7,18) = 6
+\f2\fs24  as a certified result. That is a false certificate: 6 is only known to be an upper bound there, not the true minimum.\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f0\b \cf0 Fix applied:
+\f2\b0  
+\f1\fs26 solve_tiling
+\f2\fs24  now passes 
+\f1\fs26 logPath=<tempfile>
+\f2\fs24  to 
+\f1\fs26 PULP_CBC_CMD
+\f2\fs24 , reads CBC's actual log text back, and requires the literal substring 
+\f1\fs26 "Optimal solution found"
+\f2\fs24  before trusting an "Optimal" label. (Note: 
+\f1\fs26 contextlib.redirect_stdout
+\f2\fs24  does 
+\f4\i not
+\f2\i0  work for this \'97 PuLP shells out to the 
+\f1\fs26 cbc
+\f2\fs24  binary as a subprocess that writes straight to the inherited fd 1, bypassing Python-level stdout redirection. 
+\f1\fs26 logPath
+\f2\fs24  is what actually captures it.) A result that hit the time limit without closing the gap now comes back with 
+\f1\fs26 status = "UNTRUSTED (pulp said Optimal, optimality not proven)"
+\f2\fs24  and 
+\f1\fs26 M = None
+\f2\fs24 , instead of a silently-wrong integer.\
+
+\f0\b Second check (tetromino_ilp_v2.py):
+\f2\b0  PuLP does record the difference, just not in 
+\f1\fs26 prob.status
+\f2\fs24 . In the time-limit case 
+\f1\fs26 LpStatus
+\f2\fs24  reads "Optimal" but 
+\f1\fs26 prob.sol_status
+\f2\fs24  is 2 (integer-feasible, not proven optimal) rather than 1 (optimal). The script now requires 
+\f1\fs26 sol_status == 1
+\f2\fs24  AND the log phrase before accepting a result, so a future change to either one makes results come back UNTRUSTED rather than silently accepted. It also needs 
+\f1\fs26 pip install "pulp<3"
+\f2\fs24 : PuLP 4.0 changed the 
+\f1\fs26 LpVariable
+\f2\fs24  API and the script crashes there. Tested with PuLP 2.9.0.\
+
+\f0\b Practical consequence:
+\f2\b0  any earlier value produced by a time-limited run of the old script must be treated as unverified until re-run under the fix. Concretely, in the data collected this session, the old script's raw output for 
+\f1\fs26 M(5,20)
+\f2\fs24 , 
+\f1\fs26 M(5,23)
+\f2\fs24 , 
+\f1\fs26 M(5,24)
+\f2\fs24 , 
+\f1\fs26 M(7,18)
+\f2\fs24 , 
+\f1\fs26 M(7,19)
+\f2\fs24  was wrong or unproven; re-running with the fix gives 
+\f1\fs26 M(5,20)=4
+\f2\fs24  (not the old script's 
+\f1\fs26 8
+\f2\fs24 ) and leaves 
+\f1\fs26 M(5,23)
+\f2\fs24 , 
+\f1\fs26 M(5,24)
+\f2\fs24 , 
+\f1\fs26 M(7,18)
+\f2\fs24 , 
+\f1\fs26 M(7,19)
+\f2\fs24  unresolved by the ILP (CBC could not close the gap even given 180s each). Those four values have since been settled without the ILP, by two independent exact dynamic programs (see the tables and the last section): 
+\f1\fs26 M(5,23)=7
+\f2\fs24 , 
+\f1\fs26 M(5,24)=8
+\f2\fs24 , 
+\f1\fs26 M(7,18)=6
+\f2\fs24 , 
+\f1\fs26 M(7,19)=5
+\f2\fs24 . So the old script's 6 for M(7,18) turned out to be the correct value; it just had not been proven. Anything already written into the manuscript that leaned on a 
+\f4\i time-limited
+\f2\i0  old-script run \'97 as opposed to a fast run that finished well under its limit, which is safe by construction (early termination can only mean the gap really did close to 0) \'97 needs a rerun before it's cited. 
+\f1\fs26 M(7,7) = 5
+\f2\fs24  (the Section 5 worked example) was independently re-checked directly under the fixed script and holds: it solves in well under a second with no time limit needed, so it was never at risk from this bug.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f0\b\fs36 \cf0 Verified e5(n) = M(5,n) \uc0\u8722  
+\f5 \uc0\u8970 
+\f0 n/5
+\f5 \uc0\u8971 
+\f0 , exact values\
+
+\itap1\trowd \taflags0 \trgaph108\trleft-108 \trbrdrt\brdrnil \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clwWidth506\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx332
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx664
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx996
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx1329
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx1661
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx1993
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx2326
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx2658
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx2990
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx3323
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx3655
+\clvertalc \clshdrawnil \clwWidth226\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx3987
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx4320
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx4652
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx4984
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx5316
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx5649
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx5981
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx6313
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx6646
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx6978
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx7310
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx7643
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx7975
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx8307
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+
+\fs24 \cf0 n\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 1\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 2\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 3\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 4\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 5\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 6\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 7\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 8\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 9\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 10\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 11\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 12\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 13\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 14\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 15\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 16\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 17\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 18\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 19\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 20\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 21\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 22\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 23\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 24\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 25\cell \row
+
+\itap1\trowd \taflags0 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrt\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clwWidth506\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx332
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx664
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx996
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx1329
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx1661
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx1993
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx2326
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx2658
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx2990
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx3323
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx3655
+\clvertalc \clshdrawnil \clwWidth226\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx3987
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx4320
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx4652
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx4984
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx5316
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx5649
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx5981
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx6313
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx6646
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx6978
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx7310
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx7643
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx7975
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx8307
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2\b0 \cf0 e5(n)\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 5\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 2\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 3\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 4\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 4\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 1\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 2\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 3\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 4\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 0\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 1\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 2\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 3\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 4\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 4\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 1\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 2\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 3\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 4\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 0\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 1\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 2\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 3*\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 4*\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 0\cell \lastrow\row
+\pard\pardeftab720\sa240\partightenfactor0
+\cf0 Entries without a star are certified by the ILP (zero gap, both optimality checks). Starred entries were out of the ILP's reach and are exact values from the macro-column dynamic program, confirmed by a second, independently written cell-by-cell dynamic program; that program also agrees with every unstarred entry. The value at n = 15 was previously listed as 3; that was an error. Parity rules it out, and the ILP rerun certifies M(5,15) = 7, so e5(15) = 4.\
+Reading by residue s = n mod 5, the generic value is e5(n) = s for s = 1, 2, 3, 4, and e5(n) = 0 for s = 0. Parity alone only gives this mod 4: writing n = 5k + s, the 5 x n area gives M(5,n) \uc0\u8801  5n \uc0\u8801  k + s (mod 4), so e5(n) = M(5,n) \uc0\u8722  k \uc0\u8801  s (mod 4). The actual values come from the computation. Exceptions to the generic rule among n \uc0\u8804  25: 
+\f0\b n = 1
+\f2\b0  (e5 = 5 vs. generic 1), 
+\f0\b n = 5
+\f2\b0  (e5 = 4 vs. generic 0), 
+\f0\b n = 15
+\f2\b0  (e5 = 4 vs. generic 0). n = 10, 20, 25 (also s = 0) match the generic value 0, and n = 23, 24 match it too (e5 = 3, 4). The dynamic program shows every n from 16 to 120 takes the generic value.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f0\b\fs36 \cf0 Verified e7(n) = M(7,n) \uc0\u8722  
+\f5 \uc0\u8970 
+\f0 n/7
+\f5 \uc0\u8971 
+\f0 , exact values\
+
+\itap1\trowd \taflags0 \trgaph108\trleft-108 \trbrdrt\brdrnil \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clwWidth506\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx411
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx822
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx1234
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx1645
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx2057
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx2468
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx2880
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx3291
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx3702
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx4114
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx4525
+\clvertalc \clshdrawnil \clwWidth226\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx4937
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx5348
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx5760
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx6171
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx6582
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx6994
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx7405
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx7817
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx8228
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+
+\fs24 \cf0 n\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 1\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 2\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 3\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 4\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 5\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 6\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 7\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 8\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 9\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 10\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 11\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 12\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 13\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 14\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 15\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 16\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 17\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 18\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 19\cell 
+\pard\intbl\itap1\pardeftab720\qc\partightenfactor0
+\cf0 20\cell \row
+
+\itap1\trowd \taflags0 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrt\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clwWidth506\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx411
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx822
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx1234
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx1645
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx2057
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx2468
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx2880
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx3291
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx3702
+\clvertalc \clshdrawnil \clwWidth120\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx4114
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx4525
+\clvertalc \clshdrawnil \clwWidth226\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx4937
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx5348
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx5760
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx6171
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx6582
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx6994
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx7405
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx7817
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx8228
+\clvertalc \clshdrawnil \clwWidth240\clftsWidth3 \clmart10 \clmarl10 \clmarb10 \clmarr10 \clbrdrt\brdrnil \clbrdrl\brdrnil \clbrdrb\brdrnil \clbrdrr\brdrnil \clpadt20 \clpadl20 \clpadb20 \clpadr20 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2\b0 \cf0 e7(n)\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 7\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 2\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 5\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 4\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 3\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 2\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 4\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 3\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 2\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 5\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 4\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 3\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 2\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 0\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 3\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 2\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 1\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 4*\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 3*\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 2\cell \lastrow\row
+\pard\pardeftab720\sa240\partightenfactor0
+\cf0 Stars as in the width-5 table: n = 18, 19 are exact values from the two dynamic programs, not ILP certificates.\
+By residue s = n mod 7, the generic values are s=0\uc0\u8594 0, s=1\uc0\u8594 3, s=2\uc0\u8594 2, s=3\uc0\u8594 1, s=4\uc0\u8594 4, s=5\uc0\u8594 3, s=6\uc0\u8594 2. These all satisfy e7(n) \uc0\u8801  3s (mod 4), which is forced by parity, but the congruence does not fix the value: the previous version took 3s mod 4 as the value itself, which gives 0 at s = 4, and that is wrong. The computed value at s = 4 is 4 for every n \uc0\u8801  4 (mod 7) from 4 to 116. Confirmed at s=0 (n=14), s=1 (n=8, 15), s=2 (n=2, 9, 16), s=3 (n=17), s=4 (n=4, 11, 18), s=5 (n=5, 12, 19), s=6 (n=6, 13, 20). Exceptions among n \uc0\u8804  20: 
+\f0\b n = 1
+\f2\b0  (7 vs. generic 3), 
+\f0\b n = 3
+\f2\b0  (5 vs. generic 1), 
+\f0\b n = 7
+\f2\b0  (4 vs. generic 0 \'97 the Section 5 worked example, M(7,7)=5), 
+\f0\b n = 10
+\f2\b0  (5 vs. generic 1). n = 4 and n = 11 were listed as exceptions in the previous version; they are not. The dynamic program shows every n from 11 to 120 takes the generic value.\
+\pard\pardeftab720\sa298\partightenfactor0
+
+\f0\b\fs36 \cf0 Where this leaves the computation\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f2\b0\fs24 \cf0 The ILP does hit a wall: solve time grows fast in n (roughly 0s \uc0\u8594  90s \uc0\u8594  180s+, unresolved by n\uc0\u8776 18\'9624 for both widths). But that wall does not block computing the values. The macro-column dynamic program (precompute the column-to-column transitions between fringe states once, then one shortest-path sweep over n) gives M(w,n) exactly for every n up to 120 in under a second for widths 5 and 7. For the disputed and open cases it was cross-checked by a second, independently written cell-by-cell dynamic program, and it agrees with every ILP-certified entry above. The ILP's role is now an independent check on small n.\
+What remains open is a proof, not a computation: that the generic residue patterns above hold for all n, not just n \uc0\u8804  120. Agreement up to 120 is strong evidence but not a proof. Two routes: the boundary-matching / cylinder construction in the style Hochberg uses for widths 13 and 15 (build a periodic fragment, match boundaries across the residue classes, and extend for all n past some threshold), or an argument from the fringe graph itself, since M(w,n) is a shortest-path value over a fixed finite graph; a proven bound on when such sequences become periodic would turn the computation up to that bound into a proof.\
+\
+}
